@@ -106,9 +106,10 @@ finder_search_for_definition :: ()
     if !initted then return;
 
     using definition_finder;
+    was_using_case_sensitive = case_sensitive;
+    was_using_whole_word = whole_word;
     search_in_progress = true;
     case_sensitive = true;
-    case_sensitive_toggled_manually = false;
     whole_word = true;
 
     replace_text(*finder.input, search_text);
@@ -121,6 +122,12 @@ finder_process_definition_search :: ()
     using finder;
     using definition_finder;
 
+    defer
+    {
+        case_sensitive = was_using_case_sensitive;
+        whole_word = was_using_whole_word;
+    }
+
     if request.in_progress then return;
 
     defer search_in_progress = false;
@@ -131,8 +138,6 @@ finder_process_definition_search :: ()
     for result, i: finder.results
     {
         b := *open_buffers[result.buffer_id];
-
-        if !ends_with_nocase(b.file.name, ".jai") then continue;
 
         is_definition, operation := is_jai_definition(b, result.match_offset, result.match_count);
         if !is_definition then continue;

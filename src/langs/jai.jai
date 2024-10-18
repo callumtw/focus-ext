@@ -40,6 +40,8 @@ tokenize_jai :: (using buffer: *Buffer, start_offset := -1, count := -1) -> [] B
 
 is_jai_definition :: (buffer: *Buffer, identifier_start: s64, identifier_length: s64, ignore_comments := true) -> is_definition: bool, type: Operation
 {
+    if !ends_with_nocase(buffer.file.name, ".jai") then return false, 0;
+
     // Check if the identifier is even a definition first.
 
     MAX_SEEK_LENGTH :: 4;

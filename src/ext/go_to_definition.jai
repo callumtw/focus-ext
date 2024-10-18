@@ -2,6 +2,9 @@ Definition_Finder :: struct
 {
     search_text: string;
     search_in_progress: bool;
+
+    was_using_case_sensitive: bool;
+    was_using_whole_word: bool;
 }
 definition_finder: Definition_Finder;
 
