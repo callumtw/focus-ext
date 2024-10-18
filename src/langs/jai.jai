@@ -38,6 +38,35 @@ tokenize_jai :: (using buffer: *Buffer, start_offset := -1, count := -1) -> [] B
     return tokenizer.regions;
 }
 
+is_jai_definition :: (buffer: *Buffer, identifier_start: s64, identifier_length: s64, ignore_comments := true) -> is_definition: bool, type: Operation
+{
+    // Check if the identifier is even a definition first.
+
+    MAX_SEEK_LENGTH :: 4;
+    tokenizer := get_jai_tokenizer(buffer, identifier_start + identifier_length, MAX_SEEK_LENGTH);
+
+    token := get_next_token(*tokenizer);
+    if token.type != .operation return false, 0;
+
+    is_definition := token.operation == .colon || token.operation == .colon_equal || token.operation == .double_colon;
+
+    if !is_definition then return false, token.operation;
+    if !ignore_comments then return true, token.operation;
+
+    // Then check if it's in a comment.
+
+    line_num := offset_to_real_line(buffer, min(identifier_start, xx buffer.bytes.count));
+    line_range := get_real_line_range(buffer, line_num);
+    text_start := line_range.start + count_whitespace(buffer.bytes, line_range.start, line_range.end);
+
+    tokenizer = get_jai_tokenizer(buffer, text_start, MAX_SEEK_LENGTH);
+    comment_token := get_next_token(*tokenizer);
+
+    is_definition = comment_token.type != .comment && comment_token.type != .multiline_comment;
+
+    return is_definition, token.operation;
+}
+
 tokenize_jai_for_indentation :: (buffer: *Buffer) -> [] Indentation_Token /* temp */ {
     tokens: [..] Indentation_Token;
     tokens.allocator = temp;

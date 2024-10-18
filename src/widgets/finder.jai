@@ -100,6 +100,63 @@ finder_open_from_editor :: () {
     finder_open();
 }
 
+finder_search_for_definition :: ()
+{
+    using finder;
+    if !initted then return;
+
+    using definition_finder;
+    search_in_progress = true;
+    case_sensitive = true;
+    case_sensitive_toggled_manually = false;
+    whole_word = true;
+
+    replace_text(*finder.input, search_text);
+    reset_results();
+    start_new_search(force = true);
+}
+
+finder_process_definition_search :: ()
+{
+    using finder;
+    using definition_finder;
+
+    if request.in_progress then return;
+
+    defer search_in_progress = false;
+
+    definition_index := -1;
+    definition_count := 0;
+
+    for result, i: finder.results
+    {
+        b := *open_buffers[result.buffer_id];
+
+        if !ends_with_nocase(b.file.name, ".jai") then continue;
+
+        is_definition, operation := is_jai_definition(b, result.match_offset, result.match_count);
+        if !is_definition then continue;
+
+        if definition_index < 0 then definition_index = i;
+        definition_count += 1;
+    }
+
+    if definition_index < 0
+    {
+        add_user_error(tprint("Failed to find any definitions for: %.", search_text), dismiss_in_seconds = 5);
+    }
+    else
+    {
+        if definition_count > 1 {
+            add_success_message(tprint("Found % definitions for: %.", definition_count, search_text), dismiss_in_seconds = 5);
+            finder_open();
+        }
+        else {
+            finder_open_selected_result(definition_index, .in_place);
+        }
+    }
+}
+
 finder_update :: () {
     using finder;
     if !initted return;
@@ -155,6 +212,8 @@ finder_update :: () {
     }
 
     if request.in_progress then redraw_requested = true;
+
+    update_definition_finder();
 }
 
 finder_open_selected_result :: (selected_num := -1, placement: Editor_Placement) {

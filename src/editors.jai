@@ -244,6 +244,9 @@ active_editor_handle_event :: (editor: *Editor, buffer: *Buffer, event: Input.Ev
         case .select_line;                      select_lines                        (editor, buffer); keep_selection = true;
         case .copy;                             copy_selection_to_clipboard         (editor, buffer);
 
+        // Extensions
+        case .go_to_definition;                 go_to_definition(editor); keep_selection = true;
+
         case;                                   handled = false;
     }
 

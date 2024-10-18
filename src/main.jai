@@ -990,6 +990,11 @@ focus_allocator: Allocator;
 #load "langs/markdown.jai";
 #load "langs/batch.jai";
 
+// -------------------------------------------------------------------------
+// Extensions
+#load "ext/extensions.jai";
+// -------------------------------------------------------------------------
+
 #if OS == .WINDOWS {
     #load "platform/windows.jai";
     #import "Windows_Utf8";

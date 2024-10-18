@@ -352,6 +352,9 @@ ACTIONS_COMMON :: string.[
     "go_to_next_build_error_on_the_side",
     "go_to_previous_build_error",
     "go_to_previous_build_error_on_the_side",
+
+    // Extensions
+    "go_to_definition",
 ];
 
 ACTIONS_EDITORS :: #run arrays_concat(ACTIONS_COMMON, string.[
