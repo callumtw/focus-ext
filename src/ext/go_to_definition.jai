@@ -26,7 +26,5 @@ go_to_definition :: (using editor: *Editor)
         return;
     }
 
-    add_success_message(tprint("Attempting to find a definition for: %...", search_text), dismiss_in_seconds = 3);
-
     finder_search_for_definition();
 }
