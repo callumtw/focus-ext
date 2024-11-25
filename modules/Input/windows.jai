@@ -30,6 +30,10 @@ get_key_code :: (wParam: WPARAM, extended := false) -> Key_Code {
         return MOUSE_BUTTON_MIDDLE;
     if wParam == VK_RBUTTON
         return MOUSE_BUTTON_RIGHT;
+    if wParam == VK_XBUTTON1
+        return MOUSE_BUTTON_X1;
+    if wParam == VK_XBUTTON2
+        return MOUSE_BUTTON_X2;
 
     if wParam == VK_SPACE   return xx 32;
 
@@ -93,7 +97,7 @@ get_key_code :: (wParam: WPARAM, extended := false) -> Key_Code {
     if wParam == VK_OEM_PERIOD  return xx #char ".";
     if wParam == VK_OEM_COMMA   return xx #char ",";
 
-    if (wParam >= VK_F1) && (wParam <= VK_F16) {
+    if (wParam >= VK_F1) && (wParam <= VK_F24) {
         delta := wParam - VK_F1;
         return xx(F1 + xx delta);
     }
@@ -302,6 +306,10 @@ MyWindowProc :: (hwnd: HWND, message: u32,
             maybe_send_vkey_event(VK_MBUTTON, message == WM_MBUTTONDOWN);
             if message == WM_MBUTTONDOWN SetCapture(hwnd); else ReleaseCapture();
 
+         case WM_XBUTTONDOWN; #through;
+         case WM_XBUTTONUP;
+            maybe_send_vkey_event(cast(u64) ifx wParam < 1 << 17 then VK_XBUTTON1 else VK_XBUTTON2, message == WM_XBUTTONDOWN);
+            if message == WM_XBUTTONDOWN SetCapture(hwnd); else ReleaseCapture();
 
           case WM_MOUSEMOVE;
             // We don't have mouse move events yet, but we'll record the delta.
