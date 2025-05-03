@@ -535,7 +535,7 @@ trim_both_sides :: (s: string, chars := " \t") -> string, left: s64, right: s64 
         else break;
     }
 
-    for #v2 < s.count-1..left {
+    for < s.count-1..left {
         if is_any(s[it], chars) right += 1;
         else break;
     }
