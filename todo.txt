@@ -1,0 +1,21 @@
+### Tasks
+- Alt+Shift+. to only select *next* match, not all.
+- Show open files in a row at the top, click to put in current editor, right click to put in other?
+- Some simple save-based Type syntax highlighter.
+
+
+### Go To Definition:
+- Improve detection:
+   - Ignore results inside strings.
+   - Prioritise results in the same file?
+   - Check if result is a method parameter; lower priority definition? 
+   - Or do we just evaluate "distance" from selection to definition?
+- Improve multiple definition results:
+   - Eliminate results in the finder window that aren't definitions
+   - Switch to buffer location when toggling between finder results
+   - Highlight line of definition when switching.
+
+
+### Completed
+- Naive Go To Definition based on jai declaration syntax: ':', '::' and ':='.
+- Ignore definitions in comments.
