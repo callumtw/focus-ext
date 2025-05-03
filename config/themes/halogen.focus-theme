@@ -17,12 +17,12 @@ scrollbar_background:                   181818FF
 cursor:                                 BFC9DBFF
 cursor_inactive:                        BFC9DBFF
 paste_animation:                        1C4449FF
-splitter:                               8296c120
-splitter_hover:                         8296c130
+splitter:                               8296C120
+splitter_hover:                         8296C130
 letter_highlight:                       BFC9DBFF
 list_cursor_lite:                       BFC9DB38
 list_cursor:                            FCEDFC26
-shadow_dark:                            8296c103
+shadow_dark:                            8296C103
 shadow_transparent:                     0E161C00
 text_input_label:                       3B4450FF
 
