@@ -293,7 +293,8 @@ parse_tag :: (using tokenizer: *Xml_Tokenizer, token: *Xml_Token) {
             }
 
         case;
-            parse_attribute_name(tokenizer, token);
+            if html_mode  parse_html_attribute_name(tokenizer, token);
+            else          parse_attribute_name(tokenizer, token);
     }
 }
 
@@ -320,12 +321,12 @@ parse_comment :: (using tokenizer: *Xml_Tokenizer, token: *Xml_Token) {
         state = .None;
         token.type = .comment_end;
         t += 3;
-    } else if at_string(tokenizer, "--") { // The string '--' is not allowed within a comment.
+    } else if at_string(tokenizer, "--") { // The string '--' is not allowed within an xml comment.
         token.type = .error;
         t += 2;
     } else {
         token.type = .comment_content;
-        eat_until(tokenizer, "--");
+        eat_until(tokenizer, ifx html_mode then "-->" else "--"); // In html mode the string '--' is allowed in a comment so just find the end of the comment.
     }
 }
 
@@ -355,12 +356,13 @@ parse_tag_name :: (using tokenizer: *Xml_Tokenizer, token: *Xml_Token) -> string
 parse_attribute_name :: (using tokenizer: *Xml_Tokenizer, token: *Xml_Token) {
     token.type = .attribute_name;
 
-    if !html_mode && t.* == #char "%" { // Handle parameter entity reference.
+    if t.* == #char "%" { // Handle parameter entity reference.
         t += 1;
         token.type = .dtd_parameter_entity;
         if !eat_entity(tokenizer, token)  token.type = .error;
         return;
     }
+
 
     if !VALID_NAME_TABLE[t.*] {
         t += 1;
@@ -376,6 +378,27 @@ parse_attribute_name :: (using tokenizer: *Xml_Tokenizer, token: *Xml_Token) {
             continue;
         }
         break;
+    }
+}
+
+// https://html.spec.whatwg.org/multipage/syntax.html#attributes-2
+parse_html_attribute_name :: (using tokenizer: *Xml_Tokenizer, token: *Xml_Token) {
+    token.type = .attribute_name;
+
+    if INVALID_HTML_ATTRIBUTE_NAME_TABLE[t.*] {
+        token.type = .error;
+        t += 1;
+        return;
+    }
+
+    t += 1;
+
+    while t < max_t {
+        if INVALID_HTML_ATTRIBUTE_NAME_TABLE[t.*] {
+            break;
+        }
+
+        t += 1;
     }
 }
 
@@ -419,10 +442,6 @@ parse_tag_content :: (using tokenizer: *Xml_Tokenizer, token: *Xml_Token) {
     if state == .Parsing_Implicit_Cdata_Tag_Content && active_tag_name {
         state = .None;
 
-        auto_release_temp();
-
-        t_start := t;
-
         end_tag := tprint("</%", active_tag_name);
         while t < max_t {
             eat_until(tokenizer, "</");
@@ -431,8 +450,22 @@ parse_tag_content :: (using tokenizer: *Xml_Tokenizer, token: *Xml_Token) {
         }
 
         if html_mode && active_tag_name == "script" {
-            start := cast(s32) (t_start - buf.data);
-            end   := cast(s32) (t - 1 - buf.data);
+            start := last_token.start + 1;
+            end   := cast(s32) (t - buf.data);
+
+            if t >= max_t  end = cast(s32) (t - 1 - buf.data);
+
+            t_start := buf.data + start;
+            count   := ifx t >= max_t then t - t_start - 1 else t - t_start;
+            script  := string.{ data = t_start, count = count };
+
+            found, first_line := split_from_left(script, "\n");
+            if found && is_all_whitespace(first_line)  start += xx (first_line.count + 1); // + 1 for the newline itself
+
+            if t < max_t {
+                found, _, last_line := split_from_right(script, "\n");
+                if found && is_all_whitespace(last_line)  end -= xx last_line.count;
+            }
 
             array_add(*regions, Buffer_Region.{ start = start, end = end, kind = .heredoc, lang = .Js });
         }
@@ -700,6 +733,24 @@ VALID_NAME_TABLE :: #run generate_lookup_table(Character_Range.[
 
     // '#' is not allowed for regular names, but this makes us parse DTD keywords like #PCDATA, #IMPLIED, etcetera.
     make_range(#char "#"),
+]);
+
+INVALID_HTML_ATTRIBUTE_NAME_TABLE :: #run generate_lookup_table(Character_Range.[
+    make_range(#char " "),
+    make_range(#char "\t"),
+    make_range(#char "\n"),
+    make_range(#char "\r"),
+    make_range(0x0c),
+
+    make_range(0,    0x1f),
+    make_range(0x7f, 0x9f),
+    make_range(#char "\""),
+    make_range(#char "'"),
+    make_range(#char ">"),
+    make_range(#char "/"),
+    make_range(#char "="),
+
+    // There are some multi byte characters that are omitted here (see https://html.spec.whatwg.org/multipage/syntax.html#attributes-2).
 ]);
 
 Character_Range :: struct { start: u8; end: u8; }

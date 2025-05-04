@@ -159,9 +159,13 @@ get_real_cursor_coords :: (buffer: Buffer, using cursor: Cursor) -> Cursor_Coord
     return Cursor_Coords.{ pos = pos_coords, sel = sel_coords };
 }
 
-offset_to_line :: (editor: Editor, buffer: Buffer, offset: s64) -> line_num: s32 {
+offset_to_line :: (editor: Editor, buffer: Buffer, offset: s64, $safe := false) -> line_num: s32 {
     assert(!buffer.dirty, "buffer is dirty, can't calculate line from offset");
-    assert(offset <= buffer.bytes.count, "offset exceeds buffer size, can't calculate line");
+    #if !safe {
+        assert(offset <= buffer.bytes.count, "offset exceeds buffer size, can't calculate line");
+    } else {
+        offset = clamp(offset, 0, xx buffer.bytes.count);
+    }
 
     line_starts := get_line_starts(editor, buffer);
     return search_line_num_by_offset(line_starts, offset);
@@ -182,9 +186,11 @@ remember_cursor_positions :: (buffer_id: s64, in: enum { all_editors; active_edi
     cursor_positions: [..] Editor_Cursor_Position;
     cursor_positions.allocator = temp;
 
+    active_editor_id := get_active_editor_id();
+
     for * editor, editor_id : open_editors {
         if editor.buffer_id != buffer_id continue;
-        if in == .active_editor && editor_id != editors.active continue;
+        if in == .active_editor && editor_id != active_editor_id continue;
         editor.refresh_selection = true;
 
         new_edit_group(buffer, editor);
@@ -237,6 +243,8 @@ restore_cursor_positions :: (buffer_id: s64, cursor_positions: [] Editor_Cursor_
         cursor.pos = real_coords_to_offset(buffer, pos);
         cursor.sel = real_coords_to_offset(buffer, sel);
     }
+
+    history_reset_last_seen_cursor();
 }
 
 search_line_num_by_offset :: (line_starts: [] s32, offset: s64) -> line_num: s32 {
@@ -550,10 +558,12 @@ tokenize_for_indentation :: (buffer: *Buffer) -> [] Indentation_Token /* temp */
         case .Cpp;          return tokenize_c_like_lang_for_indentation(buffer, get_next_cpp_token);
         case .Css;          return tokenize_c_like_lang_for_indentation(buffer, get_next_css_token);
         case .D;            return tokenize_c_like_lang_for_indentation(buffer, get_next_d_token);
-        case .Js;           return tokenize_c_like_lang_for_indentation(buffer, get_next_js_token);
+        case .Java;         return tokenize_c_like_lang_for_indentation(buffer, get_next_java_token);
+        case .Js;           return tokenize_js_for_indentation(buffer);
         case .Json;         return tokenize_c_like_lang_for_indentation(buffer, get_next_json_token);
         case .Glsl;         return tokenize_c_like_lang_for_indentation(buffer, get_next_glsl_token);
         case .Hlsl;         return tokenize_c_like_lang_for_indentation(buffer, get_next_hlsl_token);
+        case .Swift;        return tokenize_swift_for_indentation(buffer);
         case .Zig;          return tokenize_c_like_lang_for_indentation(buffer, get_next_zig_token);
         case .Html;         return tokenize_xml_for_indentation(buffer);
         case .Xml;          return tokenize_xml_for_indentation(buffer);
@@ -561,6 +571,7 @@ tokenize_for_indentation :: (buffer: *Buffer) -> [] Indentation_Token /* temp */
         case .Odin;         return tokenize_odin_for_indentation(buffer);
         case .Rust;         return tokenize_rust_for_indentation(buffer);
         case .Batch;        return tokenize_batch_for_indentation(buffer);
+        case .Shell;        return tokenize_shell_for_indentation(buffer);
     }
 
     return .[];
@@ -687,7 +698,7 @@ find_matching_bracket :: (using buffer: Buffer, pos: s32) -> index: s32 {
 
     balance := 0;
     if direction < 0 {
-        for < i : pos .. 0 {
+        for #v2 < i : 0 .. pos {
             if tokens[i] != .punctuation continue;
 
             byte := bytes[i];
@@ -736,6 +747,7 @@ save_buffer_to_file :: (buffer: *Buffer, buffer_id: s64, file_path: string) {
         buffer.has_file = true;
         buffer.file = get_file_info_from_full_path(file_path);
         buffer.lang = get_lang_from_path(file_path);
+        recalculate_settings(buffer);
         buffer.needs_tokenizing = true;
 
         lock(*open_buffers_lock);
@@ -774,13 +786,25 @@ save_buffer_to_file :: (buffer: *Buffer, buffer_id: s64, file_path: string) {
         if new_id < 0 return;  // logged elsewhere
 
         reroute_active_editor(buffer_id, new_id);
-        update_window_title(open_editors[editors.active].buffer_id);
-
-        array_ordered_remove_by_value(*most_recent_buffers, new_id);
-        array_insert_at(*most_recent_buffers, new_id, 0);
+        update_window_title(open_editors[get_active_editor_id()].buffer_id);
+        update_most_recent_buffers(new_id);
     }
 
     start_watching_file_if_not_already(file_path);
+}
+
+save :: (buffer_id: s64) {
+    buffer := *open_buffers[buffer_id];
+    if buffer.readonly || buffer.internal return;
+
+    if buffer.modified_on_disk {
+        // Don't save without showing a confirmation dialog
+        defer_action_overwrite_buffer(buffer_id);
+    } else if buffer.has_file {
+        save_buffer(buffer, buffer_id);
+    } else {
+        defer_action_save_as(buffer_id);
+    }
 }
 
 save_buffer :: (using buffer: *Buffer, buffer_id: s64) {
@@ -788,10 +812,12 @@ save_buffer :: (using buffer: *Buffer, buffer_id: s64) {
 
     assert(has_file, "Trying to save a buffer without an associated file. This is a bug.");
 
-    if config.settings.strip_trailing_whitespace_on_save != .disabled {
-        strip_trailing_whitespace(buffer, buffer_id, except_lines_with_cursor = config.settings.strip_trailing_whitespace_on_save == .except_lines_with_cursor);
+    buffer_settings := get_settings(buffer);
+
+    if buffer_settings.strip_trailing_whitespace_on_save != .disabled {
+        strip_trailing_whitespace(buffer, buffer_id, except_lines_with_cursor = buffer_settings.strip_trailing_whitespace_on_save == .except_lines_with_cursor);
     }
-    if config.settings.insert_final_newline_on_save      then insert_final_newline(buffer);  // important to do it after stripping
+    if buffer_settings.insert_final_newline_on_save then insert_final_newline(buffer);  // important to do it after stripping
 
     success := write_entire_file(file.full_path, to_string(bytes));
     if success {
@@ -807,7 +833,8 @@ save_buffer :: (using buffer: *Buffer, buffer_id: s64) {
         error_when_saving = true;
     }
     remember_last_mod_info(buffer);
-    if editors.active >= 0 && editors.active < open_editors.count then update_window_title(open_editors[editors.active].buffer_id);
+    active_editor_id := get_active_editor_id();
+    if active_editor_id >= 0 && active_editor_id < open_editors.count then update_window_title(open_editors[active_editor_id].buffer_id);
 
     // The config will attempt to refresh again on a file watcher message, but it should exit early because it will be unchanged.
     // We're doing it here because this way we always refresh right away, without waiting for a message to wake us up
@@ -821,12 +848,11 @@ reroute_active_editor :: (old_buffer_id: s64, new_buffer_id: s64) {
     old_buffer := *open_buffers[old_buffer_id];
     new_buffer := *open_buffers[new_buffer_id];
 
-    editor := *open_editors[editors.active];
+    editor := *open_editors[get_active_editor_id()];
 
     if editor.buffer_id == old_buffer_id {
         editor.buffer_id = new_buffer_id;
         editor.scroll_to_cursor = .yes;
-        for * cursor : editor.cursors { put_cursor_in_valid_spot(cursor, new_buffer); }
         organise_cursors(editor);
 
         assert(old_buffer.num_editors_open >= 1, "Buffer doesn't have the right number of open editors. This is a bug");
@@ -948,8 +974,9 @@ indentation_detect_from_buffer_contents :: (buffer: *Buffer) {
 }
 
 indentation_use_defaults_for_buffer :: (using buffer: *Buffer) {
-    indentation.type = config.settings.indent_using;
-    indentation.size = cast(u8) config.settings.tab_size;
+    buffer_settings := get_settings(buffer);
+    indentation.type = buffer_settings.indent_using;
+    indentation.size = cast(u8) buffer_settings.tab_size;
     add_success_message("Using defaults (%: %) for this file", ifx indentation.type == .spaces then "Spaces" else "Tabs", indentation.size, dismiss_in_seconds = 5);
 }
 
@@ -1032,8 +1059,9 @@ indentation_convert_to_spaces_for_buffer :: (buffer: *Buffer, buffer_id: s64) {
     restore_cursor_positions(buffer_id, cursor_positions);
     refresh_all_editors_for_buffer(buffer_id);
 
+    buffer_settings := get_settings(buffer);
     buffer.indentation.type = .spaces;
-    buffer.indentation.size = cast(u8) config.settings.tab_size;
+    buffer.indentation.size = cast(u8) buffer_settings.tab_size;
 }
 
 insert_final_newline :: (using buffer: *Buffer) {
@@ -1102,16 +1130,7 @@ _get_line_as_string :: (buffer: Buffer, line_starts: [] s32, line_num: s32) -> s
     return result;
 }
 
-find_or_create_an_empty_buffer :: () -> buffer_id: s64, created: bool {
-    if workspace_scan_complete {
-        // Return the first empty standalone buffer to avoid creating a million new buffers.
-        // We have to only do this if the workspace scan is complete, otherwise we'll be in for
-        // many surprising thread-related bugs
-        for * buffer, buffer_id : open_buffers {
-            if !buffer.has_file && !buffer.deleted && !buffer.readonly && !trim(to_string(buffer.bytes)) return buffer_id, false;
-        }
-    }
-
+create_an_empty_buffer :: () -> buffer_id: s64, created: bool {
     // Create a new buffer
     lock(*open_buffers_lock);
     defer unlock(*open_buffers_lock);
@@ -1120,6 +1139,10 @@ find_or_create_an_empty_buffer :: () -> buffer_id: s64, created: bool {
     buffer := bucket_array_add(*open_buffers);
     init_buffer(buffer);
     buffer.has_file = false;
+
+    // These values will be overwritten later if `detect_intentation` is true
+    buffer.indentation.type = config.settings.indent_using;
+    buffer.indentation.size = 0;
 
     rescan_for_lines(buffer);
     retokenize(buffer);
@@ -1184,6 +1207,13 @@ find_or_create_buffer :: (path: string) -> buffer_id: s64, created: bool {
     rescan_for_lines(buffer);
     retokenize(buffer);
 
+    recalculate_settings(buffer);
+
+    // These values will be overwritten later if `detect_intentation` is true
+    buffer_settings := get_settings(buffer);
+    buffer.indentation.type = buffer_settings.indent_using;
+    buffer.indentation.size = 0;
+
     return buffer_id, true;
 }
 
@@ -1215,26 +1245,28 @@ get_buffer_name :: (buffer: Buffer) -> string {
 }
 
 get_buffer_indentation_and_tab_size :: inline (using buffer: Buffer) -> Indentation, tab_size: s32 {
+    buffer_settings := get_settings(buffer);
     if indentation.size > 0 {
-        return indentation.type, ifx indentation.type == .spaces then indentation.size else cast(s32) config.settings.tab_size;
+        return indentation.type, ifx indentation.type == .spaces then indentation.size else cast(s32) buffer_settings.tab_size;
     } else {
-        return config.settings.indent_using, cast(s32) config.settings.tab_size;
+        return buffer_settings.indent_using, cast(s32) buffer_settings.tab_size;
     }
 }
 
 get_buffer_tab_size :: inline (using buffer: Buffer) -> s32 {
+    buffer_settings := get_settings(buffer);
     if indentation.size > 0 {
-        return ifx indentation.type == .spaces then indentation.size else cast(s32) config.settings.tab_size;
+        return ifx indentation.type == .spaces then indentation.size else cast(s32) buffer_settings.tab_size;
     } else {
-        return cast(s32) config.settings.tab_size;
+        return cast(s32) buffer_settings.tab_size;
     }
 }
 
-maybe_detect_and_set_indentation :: (buffer_id: s64) {
-    buffer := *open_buffers[buffer_id];
+maybe_detect_and_set_indentation :: (buffer: *Buffer) {
     if buffer.readonly || buffer.deleted || buffer.internal return;
 
-    if config.settings.detect_indentation {
+    buffer_settings := get_settings(buffer);
+    if buffer_settings.detect_indentation {
         // With this setting on all buffers need to attempt to detect indentation unless already set
         if buffer.indentation.size <= 0 && !buffer.indentation.was_manually_set then detect_and_set_indentation(buffer);
     } else {
@@ -1244,10 +1276,12 @@ maybe_detect_and_set_indentation :: (buffer_id: s64) {
 }
 
 detect_and_set_indentation :: (using buffer: *Buffer) -> enum { success; error; not_enough_data; } {
+    buffer_settings := get_settings(buffer);
+
     if is_empty(bytes) {
         // Empty files get default indentation
-        indentation.type = config.settings.indent_using;
-        indentation.size = cast(u8) config.settings.tab_size;
+        indentation.type = buffer_settings.indent_using;
+        indentation.size = cast(u8) buffer_settings.tab_size;
         return .not_enough_data;
     }
 
@@ -1256,10 +1290,7 @@ detect_and_set_indentation :: (using buffer: *Buffer) -> enum { success; error; 
     num_lines_with_tabs   := 0;
 
     MAX_INDENT :: 140;  // for the purpose of detecting indentation we don't look at lines indented more than this. Who would even do it?
-    line_differences:          [MAX_INDENT] s32;  // the numbers of differences between lines with different indents
-
-    last_indent     := 0;
-    last_difference := 0;
+    indents: [MAX_INDENT] int;  // the number of lines for each indent level
 
     b    := bytes.data;
     last := bytes.data + bytes.count - 1;
@@ -1281,21 +1312,7 @@ detect_and_set_indentation :: (using buffer: *Buffer) -> enum { success; error; 
             num_lines_with_tabs += 1;
         } else if num_spaces > 0 && num_spaces < MAX_INDENT {
             num_lines_with_spaces += 1;
-
-            difference_from_prev_line := abs(last_indent - num_spaces);
-            if difference_from_prev_line > 0 && difference_from_prev_line < MAX_INDENT {
-                line_differences[difference_from_prev_line] += 1;
-                last_difference = difference_from_prev_line;
-            } else if difference_from_prev_line == 0 && last_difference > 0 {
-                line_differences[last_difference] += 1;
-                // This is to count lines like this:
-                // int foo() {
-                //     foobar();  // <- diff = 4, remember
-                //     bazfoo();  // <- diff = 0, but count it towards the 4 still!
-                //     ...
-                //
-            }
-            last_indent = num_spaces;
+            indents[num_spaces] += 1;
         }
 
         // Skip the rest of the line
@@ -1305,28 +1322,55 @@ detect_and_set_indentation :: (using buffer: *Buffer) -> enum { success; error; 
 
     if num_lines_with_tabs < 2 && num_lines_with_spaces < 2 {
         // Not enough information, use defaults
-        indentation.type = config.settings.indent_using;
-        indentation.size = cast(u8) config.settings.tab_size;
+        indentation.type = buffer_settings.indent_using;
+        indentation.size = cast(u8) buffer_settings.tab_size;
         return .not_enough_data;
     }
 
     if num_lines_with_tabs > num_lines_with_spaces {
         // Assuming tabs
         indentation.type = .tabs;
-        indentation.size = cast(u8) config.settings.tab_size;
+        indentation.size = cast(u8) buffer_settings.tab_size;
         return .success;
     }
 
     // Assuming spaces
     indentation.type = .spaces;
-    indentation.size = cast(u8) config.settings.tab_size;  // fallback
+    indentation.size = cast(u8) buffer_settings.tab_size;  // fallback
 
-    // Find the most common line difference
-    max_lines := 0;
-    for num_lines, difference : line_differences {
-        if num_lines > max_lines {
-            indentation.size = cast(u8) difference;
-            max_lines = num_lines;
+    // Get all non-zero indents
+    Indent_Lines :: struct { level: int; num_lines: int; }
+    non_zero_indents: [..] Indent_Lines;
+    non_zero_indents.allocator = temp;
+    for num_lines, level : indents {
+        if num_lines > 0 then array_add(*non_zero_indents, Indent_Lines.{ level = level, num_lines = num_lines });
+    }
+
+    // Compress indents.
+    // E.g. if we have some 2-space indents and some 4-space indents, we might want to count those 4-space indents in favour of 2 because 2 is the common denominator.
+    // However, we don't want to do this if there's one 2-space indent and two hundred 4-space indents because it's likely that the 2 space indent is just an exception.
+    DIVISOR_RATIO :: 0.1;  // example: if the number of 2-space indents divided by the number of 4 space indents is greater than this ratio, we compress to 2 spaces
+    for #v2 < * smaller_indent, i : non_zero_indents {
+        // if smaller_indent.level <= 1 continue;  // if we allowed 1 here it would compress everything
+
+        for j : i+1 .. non_zero_indents.count-1 {
+            larger_indent := *non_zero_indents[j];
+            if larger_indent.level % smaller_indent.level != 0 continue;
+
+            ratio := cast(float) smaller_indent.num_lines / cast(float) larger_indent.num_lines;
+            if ratio >= DIVISOR_RATIO {
+                smaller_indent.num_lines += larger_indent.num_lines;
+                larger_indent.num_lines = 0;
+            }
+        }
+    }
+
+    // Choose the indent with the most lines
+    max_lines := -1;
+    for indent : non_zero_indents {
+        if indent.num_lines > max_lines {
+            indentation.size = cast(u8) indent.level;
+            max_lines = indent.num_lines;
         }
     }
 
@@ -1378,12 +1422,23 @@ refresh_buffer_from_disk_by_path :: (path: string) {
 
     if !buffer_file_has_changed_on_disk(buffer) return;
 
-    finder.need_to_refresh_results = true;
-
     // Buffer may have changed on disk - reload and compare hashes to be sure
     assert(platform_path_equals(path, buffer.file.full_path));
 
-    // Reload buffer from disk
+    reload_from_disk(buffer_id);
+
+    finder.need_to_refresh_results = true;
+}
+
+reload_from_disk :: (buffer_id: s64, force := false, show_user_messages := false) {
+    context.current_buffer_id = buffer_id;
+    defer context.current_buffer_id = -1;
+
+    buffer := *open_buffers[buffer_id];
+    assert(buffer.has_file && buffer.file.full_path);
+
+    path := buffer.file.full_path;
+
     file_contents_str, success := read_entire_file(path);
     if is_file_binary(file_contents_str) {
         free(file_contents_str);
@@ -1391,80 +1446,37 @@ refresh_buffer_from_disk_by_path :: (path: string) {
         buffer.readonly = true;
     }
 
-    if !success { log_error("Couldn't read file '%'\n", path); return; }
+    if !success {
+        if show_user_messages {
+            add_user_error("Couldn't read file:\n%", path);
+        } else {
+            log_error("Couldn't read file:\n%", path);
+        }
+        return;
+    }
     defer free(file_contents_str);
 
-    lock(*buffer.content_lock);
     bytes_removed := remove_crlf_in_place(*file_contents_str);
-    unlock(*buffer.content_lock);
-
     file_hash := calculate_hash(cast([] u8) file_contents_str);
-    if buffer.meow_hash == file_hash  return;  // file hasn't actually changed
+    if buffer.meow_hash == file_hash && !force return;
 
     buffer.crlf = bytes_removed > 0;
     buffer.meow_hash = file_hash;
     buffer.deleted = false;
 
-    if buffer.modified {
+    if buffer.modified && !force {
         // Mark conflict
         // TODO: display a dialog prompting to reload
         buffer.modified_on_disk = true;
     } else {
+        buffer.modified_on_disk = false;
         remember_last_mod_info(buffer);
-
         cursor_positions := remember_cursor_positions(buffer_id, in = .all_editors);
-
         replace_range(buffer, .{ 0, buffer.bytes.count }, file_contents_str);
-
         restore_cursor_positions(buffer_id, cursor_positions);
     }
 
     refresh_all_editors_for_buffer(buffer_id);
-}
-
-reload_from_disk :: (buffer_id: s64) {
-    // The difference between this function and `refresh_buffer_from_disk_by_path` is that
-    // this function is invoked by user and it will force reload and will produce user messages,
-    // whereas the other one is automatic and is silent
-
-    buffer := *open_buffers[buffer_id];
-    if !buffer.has_file || !buffer.file.full_path {
-        add_user_warning("Buffer has no associated file", dismiss_in_seconds = 5);
-        return;
-    }
-    path := buffer.file.full_path;
-
-    // Force reload buffer from disk, even if unchanged, and clear the flags
-    file_contents_str, success := read_entire_file(path);
-    if is_file_binary(file_contents_str) {
-        free(file_contents_str);
-        file_contents_str = sprint("Couldn't display file '%' because it's either binary or contains non-UTF8 characters.", path);
-        buffer.readonly = true;
-    }
-
-    if !success { add_user_error("Couldn't read file:\n%", path); return; }
-    defer free(file_contents_str);
-
-    bytes_removed := remove_crlf_in_place(*file_contents_str);
-
-    buffer.crlf = bytes_removed > 0;
-    buffer.meow_hash = calculate_hash(cast([] u8) file_contents_str);
-    buffer.deleted = false;
-    buffer.modified = false;  // if the user had unsaved changes and needs them again, undo should help
-
-    remember_last_mod_info(buffer);
-
-    cursor_positions := remember_cursor_positions(buffer_id, in = .all_editors);
-
-    replace_range(buffer, .{ 0, buffer.bytes.count }, file_contents_str);
-
-    restore_cursor_positions(buffer_id, cursor_positions);
-
-    refresh_all_editors_for_buffer(buffer_id);
-
-    add_success_message("File contents has been reloaded from\n%", path);
-
-    finder.need_to_refresh_results = true;
 }
 
 maybe_mark_buffer_as_deleted :: (path: string) {
@@ -1498,6 +1510,7 @@ free_buffer :: (using buffer: *Buffer) {
     free(redos);
     free(edits);
     free(cursors);
+    free(settings);
 
     if has_file && file.full_path then free(file.full_path);
 
@@ -1542,10 +1555,6 @@ get_range_as_string :: (buffer: Buffer, range: Offset_Range) -> string {
 
 init_buffer :: (using buffer: *Buffer) {
     init(*content_lock);
-
-    // These values will be overwritten later if `detect_intentation` is true
-    indentation.type = config.settings.indent_using;
-    indentation.size = 0;
 }
 
 get_unsaved_buffer_ids :: () -> [] s64 /* temp */ {
@@ -1597,6 +1606,7 @@ get_tokenize_function :: (lang: Buffer.Lang) -> Tokenize_Function {
         case .Glsl;                 return tokenize_glsl;
         case .Hlsl;                 return tokenize_hlsl;
         case .Golang;               return tokenize_golang;
+        case .Java;                 return tokenize_java;
         case .Js;                   return tokenize_js;
         case .Json;                 return tokenize_json;
         case .Lua;                  return tokenize_lua;
@@ -1604,6 +1614,7 @@ get_tokenize_function :: (lang: Buffer.Lang) -> Tokenize_Function {
         case .Python;               return tokenize_python;
         case .RenPy;                return tokenize_renpy;
         case .Rust;                 return tokenize_rust;
+        case .Shell;                return tokenize_shell;
         case .Html;                 return tokenize_xml;
         case .Xml;                  return tokenize_xml;
         case .Todo;                 return tokenize_todo;
@@ -1612,6 +1623,8 @@ get_tokenize_function :: (lang: Buffer.Lang) -> Tokenize_Function {
         case .Uxntal;               return tokenize_uxntal;
         case .Markdown;             return tokenize_markdown;
         case .Batch;                return tokenize_batch;
+        case .Swift;                return tokenize_swift;
+        case .Ini;                  return tokenize_ini;
         case .Focus_Config;         return tokenize_focus_config;
         case .Focus_Theme;          return tokenize_focus_config;
         case .Focus_Build_Panel;    return null;
@@ -1623,7 +1636,7 @@ get_supported_buffer_langs_lowercase :: () -> [] string /* intended to be run at
     lang_names: [..] string;
     for enum_names(Buffer.Lang) {
         if equal_nocase(it, "focus_build_panel") continue;  // filter out "internal" languages
-        array_add(*lang_names, to_lower_copy_new(it));
+        array_add(*lang_names, to_lower_copy(it));
     }
     quick_sort(lang_names, compare_strings);
     return lang_names;
@@ -1633,22 +1646,32 @@ get_supported_buffer_langs_lowercase :: () -> [] string /* intended to be run at
 
 Tokenize_Function :: #type (buffer: *Buffer, start_offset: s64 = -1, count: s64 = -1) -> [] Buffer_Region /* temp */;
 
-add_edit_notification :: (using buffer: *Buffer, offset: s64, old_count: s64, new_count: s64) {
-    if num_editors_open < 2 return;
+add_edit_notification :: (buffer: *Buffer, offset: s64, old_count: s64, new_count: s64) {
     editor_id := context.current_editor_id;
-    if editor_id < 0 return;
-    editor := *open_editors[editor_id];
-    if buffer != *open_buffers[editor.buffer_id] {
-        log_error("Attempting to send an edit notification from a mismatching editor. Editor id: %, buffer id: %\n", editor_id, editor.buffer_id);
-        return;
+    buffer_id := context.current_buffer_id;
+
+    if editor_id >= 0 {
+        editor := *open_editors[editor_id];
+        if buffer != *open_buffers[editor.buffer_id] || (buffer_id >= 0 && editor.buffer_id != buffer_id) {
+            log_error("Attempting to send an edit notification from a mismatching editor. Editor id: %, buffer id: %\n", editor_id, editor.buffer_id);
+            return;
+        }
+        buffer_id = editor.buffer_id;
     }
 
-    add(*buffer_edit_notifications, Buffer.Edit_Notification.{
-        buffer_id = cast(s32) editor.buffer_id,
+    notification := Buffer.Edit_Notification.{
+        buffer_id = cast(s32) buffer_id,
         editor_id = cast(s32) editor_id,
         offset    = cast(s32) (offset + min(old_count, new_count)),
         delta     = cast(s32) (new_count - old_count),
-    });
+    };
+
+    history_add_edit_notification_to_batch(notification);
+
+    if buffer.num_editors_open >= 2 {
+        // Notify other editors
+        add(*buffer_edit_notifications, notification);
+    }
 }
 
 new_replace_edit :: (buffer: *Buffer, start: s32, end: s32, old_str: string, new_str: string) {
@@ -1731,6 +1754,8 @@ Buffer :: struct {
     edits: Array(Edit);  // current edits, not in a group yet
 
     cursors: Array(Cursor);  // cursor state before any current edits were made
+
+    settings: *Settings;  // a pointer to buffer-specific settings. Null means use global settings
 
     content_lock: Mutex;  // must hold while modifying content (or reading in a non-main thread)
 
@@ -1832,6 +1857,7 @@ Buffer :: struct {
         Glsl;
         Hlsl;
         Golang;
+        Java;
         Js;
         Json;
         Lua;
@@ -1847,6 +1873,9 @@ Buffer :: struct {
         Uxntal;
         Markdown;
         Batch;
+        Swift;
+        Shell;
+        Ini;
         Focus_Config;
         Focus_Theme;
         Focus_Build_Panel;  // a fake lang to be assigned to the build panel instead of Plain_Text so that its tokens are preserved

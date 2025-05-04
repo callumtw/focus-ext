@@ -28,13 +28,13 @@ read_identifier_string :: (using tokenizer: *Tokenizer) -> string {
     return identifier;
 }
 
-read_utf8_identifier_string :: (using tokenizer: *Tokenizer) -> string {
+read_utf8_identifier_string :: (using tokenizer: *Tokenizer, $identifier_chars := "_") -> string {
     identifier: string;
     identifier.data = t;
 
     while t < max_t {
         c := t.*;
-        if c == #char "_" || is_alpha(c) || (t > identifier.data && is_digit(c)) { t += 1; continue; }
+        if is_alpha(c) || array_find(cast([] u8) identifier_chars, c) || (t > identifier.data && is_digit(c)) { t += 1; continue; }
 
         // Only check for unicode chars after the most common case is out of the way.
         // We don't do comprehensive checks because Unicode docs are cryptic and we might not need every possible character anyway
@@ -120,6 +120,13 @@ is_white_space :: inline (char : u8) -> bool #no_aoc {
     }
 
     return cast,no_check(bool) result;
+}
+
+at_string :: (using tokenizer: *Tokenizer, a: string, $case_sensitive := true) -> bool {
+    if t + a.count > max_t  return false;
+    b := string.{ count = a.count, data = t };
+    #if case_sensitive  return equal(a, b);
+    else                return equal_nocase(a, b);
 }
 
 tokenize_c_like_lang_for_indentation :: (buffer: Buffer, $get_next_token: (*Tokenizer) -> $Token) -> [] Indentation_Token /* temp */ {
@@ -216,13 +223,22 @@ parse_number_c_like :: (using tokenizer: *Tokenizer, token: *$Token) {
                     if t >= max_t return;
 
                     if t.* == #char "u" || t.* == #char "U" {     // llu
+                        t += 1;
+                    }
+                } else if t.* == #char "u" || t.* == #char "U" {  // lu
                     t += 1;
                 }
-            } else if t.* == #char "u" || t.* == #char "U" {      // lu
-                t += 1;
-            }
             } else if  t.* == #char "u" || t.* == #char "U" {     // u
                 t += 1;
+                if t >= max_t return;
+
+                if t.* == #char "l" || t.* == #char "L" {         // ul
+                    t += 1;
+                    if t >= max_t return;
+                    if t.* == #char "l" || t.* == #char "L" {     // ull
+                        t += 1;
+                    }
+                }
             }
         }
     } else if start_char == #char "0" {
@@ -240,7 +256,7 @@ parse_number_c_like :: (using tokenizer: *Tokenizer, token: *$Token) {
 }
 
 get_lang_from_name :: (lang_name: string) -> Buffer.Lang, found: bool {
-    lowercase_name := to_lower_copy_new(lang_name,, temp);
+    lowercase_name := to_lower_copy(lang_name,, temp);
     if lowercase_name == {
         case "jai";          return .Jai,        true;
         case "c";            return .C,          true;
@@ -252,6 +268,7 @@ get_lang_from_name :: (lang_name: string) -> Buffer.Lang, found: bool {
         case "hlsl";         return .Hlsl,       true;
         case "go";           return .Golang,     true;
         case "golang";       return .Golang,     true;
+        case "java";         return .Java,       true;
         case "js";           return .Js,         true;
         case "jsx";          return .Js,         true;
         case "json";         return .Json,       true;
@@ -272,6 +289,12 @@ get_lang_from_name :: (lang_name: string) -> Buffer.Lang, found: bool {
         case "md";           return .Markdown,   true;
         case "markdown";     return .Markdown,   true;
         case "batch";        return .Batch,      true;
+        case "swift";        return .Swift,      true;
+        case "shell";        return .Shell,      true;
+        case "sh";           return .Shell,      true;
+        case "bash";         return .Shell,      true;
+        case "zsh";          return .Shell,      true;
+        case "ini";          return .Ini,        true;
 
         // case "focus_config"; return .Focus_Config, true;  // disabled for now
         // case "focus_theme";  return .Focus_Theme,  true;

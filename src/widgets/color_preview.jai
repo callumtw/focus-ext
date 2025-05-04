@@ -1,7 +1,7 @@
 init_color_preview :: () {
     // Init the panel buffer
     assert(panel_buffer_id < 0, "Code helper panel already has a buffer. This is a bug");
-    panel_buffer_id = find_or_create_an_empty_buffer();
+    panel_buffer_id = create_an_empty_buffer();
     panel_editor_id = find_or_create_editor(panel_buffer_id);
     buffer := *open_buffers[panel_buffer_id];
     buffer.internal = true;
@@ -64,17 +64,8 @@ is_color_preview_panel :: inline (editor_id: s64) -> bool {
     return editor_id == panel_editor_id;
 }
 
-color_preview_get_target_buffer_id :: inline () -> s64 {
-    return target_buffer_id;
-}
-
 color_preview_lose_focus :: () {
-    // Sometimes we might want to make the previously active editor active, e.g. when deciding on new buffer placement
-    if editors.active != editors.left && editors.active != editors.right && editors.left >= 0 && editors.right >= 0 {
-        // If we still have the same editors open when the panel was opened, go back to the previously active one,
-        // otherwise default to left.
-        make_editor_active(ifx target_editor_id == editors.right then editors.right else editors.left);
-    }
+    activate_editors();
 }
 
 color_preview_set_height :: (height: float) {
@@ -84,17 +75,6 @@ color_preview_set_height :: (height: float) {
 
 color_preview_set_width :: (width: float) {
     color_preview_width = clamp(width, 0.1, 1.0);
-}
-
-color_preview_get_position :: () -> Panel_Position {
-    if #complete editors.layout == {
-        case .None;     saved_position = .right;
-        case .Single;   saved_position = .right;
-        case .Double;   if editor_closing_id >= 0 then saved_position = .right;
-                        else if editors.active == editors.left  then saved_position = .right;
-                        else if editors.active == editors.right then saved_position = .left;
-    }
-    return saved_position;
 }
 
 color_preview_begin_draw :: (editor_id: s64) {
@@ -168,6 +148,7 @@ color_preview_set_language :: (lang_id: int) {
 
     editor, buffer := *open_editors[panel_editor_id], *open_buffers[panel_buffer_id];
     buffer.lang = languages[lang_id].lang;
+    recalculate_settings(buffer);
 
     close_search_bar(editor);
     reset_search_results(*editor.search_bar);
@@ -260,8 +241,7 @@ color_preview_draw_color_picker :: (rect: Rect) {
     count := color_end - color_start;
     if count != 6 && count != 8 return;
 
-    on_left := saved_position == .left;
-    draw_color_picker(target_editor_id, editor, buffer, rect, .{color_start, color_end}, on_left);
+    draw_color_picker(target_editor_id, editor, buffer, rect, .{color_start, color_end});
 }
 
 color_preview_jump_to_color_name :: (color_name: string) {
@@ -281,7 +261,7 @@ color_preview_jump_to_color_name :: (color_name: string) {
     cursor.pos = cast(s32) offset;
     cursor.sel = cursor.pos;
     add_paste_animation(target_editor_id, get_real_line_range(buffer, offset_to_real_line(buffer, cursor.pos)));
-    editor.cursor_moved = .jumped;
+    editor.cursor_moved = true;
     editor.scroll_to_cursor = .yes;
 }
 
@@ -304,6 +284,7 @@ get_language_sample_text :: (lang: Buffer.Lang) -> string {
         case .Glsl;              return SAMPLE_Glsl;
         case .Hlsl;              return SAMPLE_Hlsl;
         case .Golang;            return SAMPLE_Golang;
+        case .Java;              return SAMPLE_Java;
         case .Js;                return SAMPLE_Js;
         case .Json;              return SAMPLE_Json;
         case .Lua;               return SAMPLE_Lua;
@@ -319,6 +300,9 @@ get_language_sample_text :: (lang: Buffer.Lang) -> string {
         case .Uxntal;            return SAMPLE_Uxntal;
         case .Markdown;          return SAMPLE_Markdown;
         case .Batch;             return SAMPLE_Batch;
+        case .Swift;             return SAMPLE_Swift;
+        case .Shell;             return SAMPLE_Shell;
+        case .Ini;               return SAMPLE_Ini;
 
         case .Plain_Text;        #through;
         case .Focus_Config;      #through;
@@ -380,11 +364,7 @@ Color_Preview_Language :: struct {
 panel_buffer_id := -1;
 panel_editor_id := -1;
 
-saved_position := Panel_Position.right;
-
 color_preview_warning: string;
-
-Panel_Position :: enum { left; right; }
 
 OLD_COLOR_MAP: [COLOR_MAP_SIZE] Vector4;
 

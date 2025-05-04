@@ -206,6 +206,68 @@ class Program
 
 CSHARP
 
+SAMPLE_Java :: #string JAVA
+package org.example.java;
+
+import java.util.Date;
+import java.util.ArrayList;
+import org.apache.commons.*;
+import static SomeClass.STATIC_FIELD;
+
+/**
+ * Documentation for <code>SomeClass</code> --- @see Math#sin(double)
+ * @param T a type that extends Runnable
+ */
+@Annotation(param1 = "value1", param2 = "value2")
+@SuppressWarnings({"ALL"})
+public class SomeClass<T extends Runnable> implements SomeInterface, SomeOtherInterface {
+    @JsonElement
+    private T field                     = null;
+    private double doubleField          = 12345.67890;         // inline comment
+    @Value("${system.someString}")
+    private String someString           = "\nSome String \n";
+
+    /*
+        Multiline comment
+    */
+    final int packagePrivateField       = 2;
+    protected final int protectedField  = 3;
+    public final int instanceFinalField = 2;
+    public static int STATIC_FIELD      = 3;
+
+    /**
+     * Method documentation
+     * @param param
+     */
+    public SomeClass(int[] param) {
+        int intValue = this.STATIC_FIELD + param[0] + 5;
+        long data    = (long) doubleField;
+        int[] f      = new int[]{1, 1, 2, 3, 5, 8, 13, 21};
+
+        ArrayList history      = new ArrayList<List<? extends SomeOtherClass>>(); // nested generic types
+        ArrayList<String> list = new ArrayList<>();                               // implicit generic type
+        list                   = new ArrayList<String>().toArray(new int[23]);    // explicit generic type
+
+        for (String stringValue: list) {
+            for (int i = 0; i < 4; i++) {
+                System.out.println(String.format("%d [string: %s (%d)]", i, stringValue, intValue));
+                intValue++;
+            }
+        }
+    }
+
+    @Override
+    public <E extends T> E addAll(Collection<T> collection) {
+        // ...
+    }
+
+    @Deprecated
+    public static <T> void merge(List<T> dest, List<? extends T> src) {
+        // ...
+    }
+}
+
+JAVA
 
 SAMPLE_Odin :: #string ODIN
 // Comment
@@ -1073,3 +1135,119 @@ for %%i in (apple, mango, elderberry) do (
 
 :end
 BATCH
+
+SAMPLE_Swift :: #string SWIFT
+import Foundation
+
+class Car {
+    var make: String
+    var model: String
+    var year: Int
+    var isEngineOn: Bool = false
+
+    init(make: String, model: String, year: Int) {
+        self.make = make
+        self.model = model
+        self.year = year
+    }
+
+    func startEngine() {
+        if !isEngineOn {
+            isEngineOn = true
+            print("The engine is now on.")
+        } else {
+            print("The engine is already running.")
+        }
+    }
+
+    func stopEngine() {
+        if isEngineOn {
+            isEngineOn = false
+            print("The engine is now off.")
+        } else {
+            print("The engine is already off.")
+        }
+    }
+
+    func displayDetails() {
+        print("\(year) \(make) \(model)")
+    }
+}
+
+let myCar = Car(make: "Toyota", model: "Corolla", year: 2020)
+myCar.displayDetails()
+myCar.startEngine()
+myCar.stopEngine()
+
+SWIFT
+
+SAMPLE_Shell :: #string LANG_SHELL
+#!/bin/bash
+
+shopt -s nocaseglob
+set -xe
+
+# This is a comment.
+
+function usage () {
+    echo "Usage: ${0##*/} <name>" >&2
+}
+
+NAME=${1}
+if [[ -z ${NAME} ]]; then
+    echo "Sir, we cannot procceed without your name!" >&2
+    usage
+    exit 1
+elif [[ "${NAME}" = "poop" ]]; then
+    echo "...There's no way your name is \"poop.\" Try again." >&2
+    exit 1
+fi
+
+echo "Hello, ${NAME}! Nice to meet you."
+
+COUNTER=$(( ${RANDOM} % 200 ))  # Random number in [0, 200)
+COUNTER=$(( ${COUNTER} + 1 ))   # Change number to [1, 200]
+
+echo -ne "----- Counting down from $COUNTER... -----\n"
+
+for (( i = $COUNTER ; i >= 0 ; i-- )); do
+    echo "${i}..."
+done
+
+echo -e "\n----- Displaying some fruits... -----"
+
+FRUITS=("apple" "mango" "elderberry")
+for fruit in "${FRUITS[@]}"; do
+    echo "We have a(n) ${fruit:-missing fruit??}!"
+done
+
+printf "\n"
+
+cat << DONE
+----- Mutiline strings... ------
+This is a multiline string!
+This is what inspired Jai's #string functionality.
+Isn't it neat?
+DONE
+
+LANG_SHELL
+
+
+SAMPLE_Ini :: #string LANG_INI
+; INI Parse sample.
+
+[Section 1]
+SomeInt = 123 ; that is indeed some int
+SomeString = "This is a string"
+
+[Section 2]
+SomeOtherInt = 1234
+CombinedValue = "This is " a different 'string'   ; fancy
+
+[Section 3]
+MultiLineString = "This string
+extends to multiple
+lines"
+StillOk = true
+
+LANG_INI
