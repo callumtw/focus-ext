@@ -189,7 +189,7 @@ finder_process_definition_search :: ()
             finder_open();
         }
         else {
-            finder_open_selected_result(definition_index, .in_place);
+            finder_open_selected_result(.in_place, definition_index);
         }
     }
 }
